@@ -3,10 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 
+const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
 const db = require('./db');
 
+const JWT_SECRET = process.env.JWT_SECRET;
 const SALT_ROUNDS = Number(process.env.SALT_ROUNDS) || 10;
 
 app.use(express.json());
@@ -22,6 +24,30 @@ async function createUser(name, email, password) {
 
     const getUserQuery = db.prepare('SELECT id, name, email FROM users WHERE id = ?');
     return getUserQuery.get(user.lastInsertRowid);
+}
+
+async function findUserById(userId) {
+    const query = db.prepare('SELECT name, email FROM users WHERE id = ?');
+    return query.get(userId);
+}
+
+function requireAuth(req, res, next) {
+    try {
+        const authHeader = req?.headers?.authorization || '';
+        if (!authHeader) {
+            return res.status(401).json({ status: 'error', message: 'Missing authorization header.' });
+        }
+
+        const token = authHeader.split(' ')[1];
+        const verifiedToken = jwt.verify(token, JWT_SECRET);
+
+        req.userId = verifiedToken.userId;
+
+        next();
+    } catch (error) {
+        res.status(401).json({ status: 'error', message: error.message });
+    }
+
 }
 
 app.get('/status', (req, res) => {
@@ -69,9 +95,33 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(401).json({ status: 'error', message: 'Invalid email or password' });
         }
 
+        const token = jwt.sign(
+            { userId: existingUser.id },
+            JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
         res.status(200).json({
             status: 'success',
-            message: 'User logged in successfully'
+            message: 'User logged in successfully',
+            data: { token }
+        });
+    } catch (error) {
+        console.error(error.message);
+        res.status(500).json({
+            status: 'error',
+            message: 'Something went wrong'
+        });
+    }
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+    try {
+        const user = await findUserById(req.userId);
+
+        res.status(200).json({
+            status: 'success',
+            data: { user }
         });
     } catch (error) {
         console.error(error.message);
